@@ -260,13 +260,178 @@ def calculate_kpis(filtered_df: pd.DataFrame) -> dict:
 
 
 # ============================================================================
-# 메인 UI (페이즈 2: MVP)
+# 페이즈 3: 비교 분석 함수
+# ============================================================================
+
+# 시간대 프리셋 정의
+TIME_PRESETS = {
+    "출근": ("07:00", "09:00"),
+    "퇴근": ("18:00", "20:00"),
+}
+
+
+def filter_for_direction_compare(df: pd.DataFrame, day_type: str, line: str, 
+                                  station: str, start_time: str, end_time: str) -> pd.DataFrame:
+    """
+    양방향 데이터를 필터링합니다 (방향 비교용).
+    
+    Args:
+        df: 전처리된 DataFrame
+        day_type: 요일구분
+        line: 호선
+        station: 역명
+        start_time: 시작 시간
+        end_time: 종료 시간
+        
+    Returns:
+        양방향 데이터가 포함된 필터링된 DataFrame
+    """
+    filtered = df[
+        (df['day_type'] == day_type) &
+        (df['line'] == line) &
+        (df['station_name'] == station) &
+        (df['time_slot'] >= start_time) &
+        (df['time_slot'] <= end_time)
+    ].copy()
+    
+    return filtered
+
+
+def filter_for_line_compare(df: pd.DataFrame, day_type: str, lines: list, 
+                            direction: str, start_time: str, end_time: str) -> pd.DataFrame:
+    """
+    다중 호선 데이터를 필터링합니다 (호선별 비교용).
+    
+    Args:
+        df: 전처리된 DataFrame
+        day_type: 요일구분
+        lines: 호선 리스트
+        direction: 방향
+        start_time: 시작 시간
+        end_time: 종료 시간
+        
+    Returns:
+        다중 호선 데이터가 포함된 필터링된 DataFrame
+    """
+    filtered = df[
+        (df['day_type'] == day_type) &
+        (df['line'].isin(lines)) &
+        (df['direction'] == direction) &
+        (df['time_slot'] >= start_time) &
+        (df['time_slot'] <= end_time)
+    ].copy()
+    
+    return filtered
+
+
+def create_direction_compare_chart(df: pd.DataFrame, time_slots: list, 
+                                   station: str, day_type: str) -> alt.Chart:
+    """
+    방향 비교 멀티라인 차트를 생성합니다.
+    
+    Args:
+        df: 양방향 데이터 DataFrame
+        time_slots: 전체 시간대 리스트
+        station: 역명
+        day_type: 요일구분
+        
+    Returns:
+        Altair 차트 객체
+    """
+    # NaN 제외
+    chart_data = df.dropna(subset=['congestion'])
+    
+    if len(chart_data) == 0:
+        return None
+    
+    chart = alt.Chart(chart_data).mark_line(point=True, strokeWidth=3).encode(
+        x=alt.X('time_slot:N', 
+                title='시간대',
+                sort=time_slots,
+                axis=alt.Axis(labelAngle=-45)),
+        y=alt.Y('congestion:Q', 
+                title='혼잡도',
+                scale=alt.Scale(domain=[0, max(chart_data['congestion'].max() * 1.1, 100)])),
+        color=alt.Color('direction:N', 
+                       title='방향',
+                       scale=alt.Scale(scheme='category10')),
+        tooltip=[
+            alt.Tooltip('direction:N', title='방향'),
+            alt.Tooltip('time_slot:N', title='시간대'),
+            alt.Tooltip('congestion:Q', title='혼잡도', format='.1f')
+        ]
+    ).properties(
+        title=f"{station} 방향별 비교 - {day_type}",
+        height=400
+    ).configure_point(
+        size=80
+    )
+    
+    return chart
+
+
+def create_line_compare_chart(df: pd.DataFrame, time_slots: list, 
+                              direction: str, day_type: str) -> alt.Chart:
+    """
+    호선별 비교 멀티라인 차트를 생성합니다.
+    
+    Args:
+        df: 다중 호선 데이터 DataFrame
+        time_slots: 전체 시간대 리스트
+        direction: 방향
+        day_type: 요일구분
+        
+    Returns:
+        Altair 차트 객체
+    """
+    # NaN 제외하고 시간대별 호선별 평균 계산
+    chart_data = df.dropna(subset=['congestion']).groupby(
+        ['line', 'time_slot'], as_index=False
+    )['congestion'].mean()
+    
+    if len(chart_data) == 0:
+        return None
+    
+    chart = alt.Chart(chart_data).mark_line(point=True, strokeWidth=3).encode(
+        x=alt.X('time_slot:N', 
+                title='시간대',
+                sort=time_slots,
+                axis=alt.Axis(labelAngle=-45)),
+        y=alt.Y('congestion:Q', 
+                title='평균 혼잡도',
+                scale=alt.Scale(domain=[0, max(chart_data['congestion'].max() * 1.1, 100)])),
+        color=alt.Color('line:N', 
+                       title='호선',
+                       scale=alt.Scale(scheme='category10')),
+        tooltip=[
+            alt.Tooltip('line:N', title='호선'),
+            alt.Tooltip('time_slot:N', title='시간대'),
+            alt.Tooltip('congestion:Q', title='평균 혼잡도', format='.1f')
+        ]
+    ).properties(
+        title=f"호선별 평균 혼잡도 비교 ({direction}) - {day_type}",
+        height=400
+    ).configure_point(
+        size=80
+    )
+    
+    return chart
+
+
+# ============================================================================
+# 메인 UI (페이즈 3: 비교 기능 확장)
 # ============================================================================
 
 def main():
     st.set_page_config(page_title="서울 지하철 혼잡도 대시보드", layout="wide")
     st.title("🚇 서울 지하철 혼잡도 대시보드")
-    st.markdown("**페이즈 2**: 혼잡도 분석 및 시각화")
+    st.markdown("**페이즈 3**: 혼잡도 분석, 시각화 및 비교 기능")
+    
+    # 간단한 사용 안내
+    st.info("""
+    💡 **빠른 시작**: 왼쪽 사이드바에서 역과 시간대를 선택하세요. 
+    출근/퇴근 시간대 프리셋을 사용하거나 여러 호선을 선택하여 비교할 수 있습니다.
+    """)
     
     # 데이터 파일 경로
     data_file = "서울교통공사_지하철혼잡도정보_20250930.csv"
@@ -305,11 +470,44 @@ def main():
         
         # 시간대 범위
         time_slots = sorted(df['time_slot'].unique().tolist())
+        
+        st.markdown("**⏰ 시간대 프리셋**")
+        col_preset1, col_preset2, col_preset3 = st.columns(3)
+        
+        with col_preset1:
+            if st.button("출근", use_container_width=True):
+                st.session_state['time_range'] = TIME_PRESETS["출근"]
+        
+        with col_preset2:
+            if st.button("퇴근", use_container_width=True):
+                st.session_state['time_range'] = TIME_PRESETS["퇴근"]
+        
+        with col_preset3:
+            if st.button("전체", use_container_width=True):
+                st.session_state['time_range'] = (time_slots[0], time_slots[-1])
+        
+        # 기본값 설정 (session_state가 없는 경우)
+        if 'time_range' not in st.session_state:
+            st.session_state['time_range'] = (time_slots[0], time_slots[-1])
+        
         st.markdown("**시간대 범위**")
         start_time, end_time = st.select_slider(
             "시간대 선택",
             options=time_slots,
-            value=(time_slots[0], time_slots[-1])
+            value=st.session_state['time_range'],
+            key='time_slider'
+        )
+        
+        # session_state 업데이트
+        st.session_state['time_range'] = (start_time, end_time)
+        
+        st.markdown("---")
+        st.markdown("**🚇 호선별 비교**")
+        compare_lines = st.multiselect(
+            "비교할 호선 선택",
+            options=lines,
+            default=[selected_line] if selected_line in lines else [],
+            help="여러 호선을 선택하여 혼잡도를 비교할 수 있습니다."
         )
         
         st.markdown("---")
@@ -402,67 +600,220 @@ def main():
     st.markdown("---")
     
     # ========================================================================
-    # TOP 구간 테이블 + CSV 다운로드
+    # 방향 비교 차트 (페이즈 3)
+    # ========================================================================
+    st.markdown("### ⚖️ 방향별 혼잡도 비교")
+    
+    # 양방향 데이터 필터링
+    direction_compare_df = filter_for_direction_compare(
+        df, 
+        selected_day, 
+        selected_line, 
+        selected_station,
+        start_time, 
+        end_time
+    )
+    
+    if len(direction_compare_df) > 0:
+        direction_chart = create_direction_compare_chart(
+            direction_compare_df, 
+            time_slots, 
+            selected_station, 
+            selected_day
+        )
+        
+        if direction_chart is not None:
+            st.altair_chart(direction_chart, use_container_width=True)
+        else:
+            st.info("방향별 비교 데이터가 없습니다.")
+    else:
+        st.info("선택한 조건에 해당하는 방향별 데이터가 없습니다.")
+    
+    st.markdown("---")
+    
+    # ========================================================================
+    # 호선별 비교 차트 (페이즈 3)
+    # ========================================================================
+    if len(compare_lines) > 0:
+        st.markdown("### 🚇 호선별 평균 혼잡도 비교")
+        
+        # 다중 호선 데이터 필터링
+        line_compare_df = filter_for_line_compare(
+            df, 
+            selected_day, 
+            compare_lines, 
+            selected_direction,
+            start_time, 
+            end_time
+        )
+        
+        if len(line_compare_df) > 0:
+            line_chart = create_line_compare_chart(
+                line_compare_df, 
+                time_slots, 
+                selected_direction, 
+                selected_day
+            )
+            
+            if line_chart is not None:
+                st.altair_chart(line_chart, use_container_width=True)
+                
+                # 추가 정보 표시
+                unique_lines_in_result = line_compare_df['line'].nunique()
+                if unique_lines_in_result < len(compare_lines):
+                    st.caption(f"⚠️ 선택한 {len(compare_lines)}개 호선 중 {unique_lines_in_result}개 호선의 데이터만 표시됩니다.")
+            else:
+                st.info("호선별 비교 데이터가 없습니다.")
+        else:
+            st.info("선택한 조건에 해당하는 호선별 데이터가 없습니다.")
+        
+        st.markdown("---")
+    
+    # ========================================================================
+    # TOP 구간 테이블 + CSV 다운로드 (페이즈 3: 기준 선택)
     # ========================================================================
     st.markdown("### 🔝 혼잡 TOP 10 구간")
     
-    # 혼잡 TOP 10 구간
+    # TOP N 정렬 기준 선택
+    col_top1, col_top2 = st.columns([2, 1])
+    
+    with col_top1:
+        top_criteria = st.radio(
+            "정렬 기준",
+            options=["피크 (최대)", "평균", "특정 시간대"],
+            horizontal=True,
+            help="혼잡 TOP 구간을 선택한 기준으로 정렬합니다."
+        )
+    
+    with col_top2:
+        if top_criteria == "특정 시간대":
+            specific_time = st.selectbox(
+                "시간대 선택",
+                options=time_slots,
+                index=time_slots.index("08:00") if "08:00" in time_slots else 0
+            )
+    
+    # 혼잡 TOP 10 구간 계산
     top_n = 10
-    top_df = filtered_df.dropna(subset=['congestion']).nlargest(top_n, 'congestion')[
-        ['time_slot', 'station_name', 'line', 'direction', 'congestion']
-    ].reset_index(drop=True)
     
-    # 순위 추가
-    top_df.insert(0, '순위', range(1, len(top_df) + 1))
+    if top_criteria == "피크 (최대)":
+        # 기존 방식: 각 시간대별 최대값
+        top_df = filtered_df.dropna(subset=['congestion']).nlargest(top_n, 'congestion')[
+            ['time_slot', 'station_name', 'line', 'direction', 'congestion']
+        ].reset_index(drop=True)
     
-    # 컬럼명 한글화
-    top_df_display = top_df.rename(columns={
-        '순위': '순위',
-        'time_slot': '시간대',
-        'station_name': '역명',
-        'line': '호선',
-        'direction': '방향',
-        'congestion': '혼잡도'
-    })
+    elif top_criteria == "평균":
+        # 역/방향별 평균 혼잡도로 정렬
+        avg_df = filtered_df.dropna(subset=['congestion']).groupby(
+            ['station_name', 'line', 'direction'], as_index=False
+        )['congestion'].mean()
+        avg_df = avg_df.rename(columns={'congestion': 'avg_congestion'})
+        top_df = avg_df.nlargest(top_n, 'avg_congestion')[
+            ['station_name', 'line', 'direction', 'avg_congestion']
+        ].reset_index(drop=True)
+        top_df = top_df.rename(columns={'avg_congestion': 'congestion'})
+        top_df.insert(1, 'time_slot', '평균')
     
-    st.dataframe(
-        top_df_display,
-        use_container_width=True,
-        hide_index=True
-    )
+    else:  # 특정 시간대
+        # 특정 시간대의 혼잡도로 정렬
+        time_specific_df = filtered_df[
+            filtered_df['time_slot'] == specific_time
+        ].dropna(subset=['congestion'])
+        top_df = time_specific_df.nlargest(top_n, 'congestion')[
+            ['time_slot', 'station_name', 'line', 'direction', 'congestion']
+        ].reset_index(drop=True)
     
-    # CSV 다운로드 버튼
-    csv = top_df_display.to_csv(index=False).encode('utf-8-sig')
-    st.download_button(
-        label="📥 CSV 다운로드",
-        data=csv,
-        file_name=f"혼잡도_TOP{top_n}_{selected_station}_{selected_day}.csv",
-        mime="text/csv",
-        help="상위 혼잡 구간 데이터를 CSV 파일로 다운로드합니다."
-    )
+    # 빈 결과 처리
+    if len(top_df) == 0:
+        st.info("선택한 조건에 해당하는 혼잡 데이터가 없습니다.")
+    else:
+        # 순위 추가
+        top_df.insert(0, '순위', range(1, len(top_df) + 1))
+        
+        # 컬럼명 한글화
+        top_df_display = top_df.rename(columns={
+            '순위': '순위',
+            'time_slot': '시간대',
+            'station_name': '역명',
+            'line': '호선',
+            'direction': '방향',
+            'congestion': '혼잡도'
+        })
+        
+        st.dataframe(
+            top_df_display,
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # CSV 다운로드 버튼
+        csv = top_df_display.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 CSV 다운로드",
+            data=csv,
+            file_name=f"혼잡도_TOP{top_n}_{selected_station}_{selected_day}.csv",
+            mime="text/csv",
+            help="상위 혼잡 구간 데이터를 CSV 파일로 다운로드합니다."
+        )
     
     # ========================================================================
     # 추가 정보 (접을 수 있음)
     # ========================================================================
-    with st.expander("ℹ️ 데이터 정보"):
-        st.markdown(f"""
-        **필터 조건:**
-        - 요일구분: {selected_day}
-        - 호선: {selected_line}
-        - 역: {selected_station}
-        - 방향: {selected_direction}
-        - 시간대: {start_time} ~ {end_time}
+    with st.expander("ℹ️ 데이터 정보 및 사용 가이드"):
+        st.markdown("### 📋 필터 조건")
+        col_info1, col_info2 = st.columns(2)
         
-        **필터링된 데이터:** {len(filtered_df)}개 레코드
+        with col_info1:
+            st.markdown(f"""
+            **기본 필터:**
+            - 요일구분: `{selected_day}`
+            - 호선: `{selected_line}`
+            - 역: `{selected_station}`
+            - 방향: `{selected_direction}`
+            """)
+        
+        with col_info2:
+            st.markdown(f"""
+            **시간대:**
+            - 범위: `{start_time} ~ {end_time}`
+            
+            **비교 설정:**
+            - 비교 호선: `{', '.join(compare_lines) if compare_lines else '없음'}`
+            """)
+        
+        st.markdown(f"**필터링된 데이터:** {len(filtered_df):,}개 레코드")
+        
+        st.markdown("---")
+        st.markdown("### 📊 혼잡도 해석")
+        st.markdown("""
+        혼잡도는 지하철 칸의 혼잡 정도를 나타내는 지표입니다:
+        
+        | 혼잡도 범위 | 상태 | 설명 |
+        |------------|------|------|
+        | 100 이상 | 🔴 매우 혼잡 | 승객이 많아 불편할 수 있음 |
+        | 60-100 | 🟡 보통 혼잡 | 일부 서서 가는 승객 있음 |
+        | 30-60 | 🟢 여유 있음 | 대부분 앉아서 이동 가능 |
+        | 0-30 | 🔵 매우 여유로움 | 충분한 좌석 여유 |
+        
+        **참고:** 0.0 값은 해당 시간대에 미운행 또는 미집계된 데이터일 수 있습니다.
         """)
         
-        st.markdown("**혼잡도 해석:**")
+        st.markdown("---")
+        st.markdown("### 🎯 기능 가이드")
         st.markdown("""
-        - 혼잡도는 지하철 칸의 혼잡 정도를 나타내는 지표입니다.
-        - 100 이상: 매우 혼잡 (승객이 많아 불편할 수 있음)
-        - 60-100: 보통 혼잡
-        - 30-60: 여유 있음
-        - 0-30: 매우 여유로움
+        **시간대 프리셋:**
+        - **출근**: 오전 7시~9시 구간
+        - **퇴근**: 오후 6시~8시 구간
+        - **전체**: 전체 운행 시간
+        
+        **비교 기능:**
+        - **방향 비교**: 선택한 역의 상/하행(또는 내/외선) 혼잡도 비교
+        - **호선별 비교**: 여러 호선의 평균 혼잡도를 시간대별로 비교
+        
+        **TOP N 정렬:**
+        - **피크 (최대)**: 각 시간대별 최대 혼잡도 기준
+        - **평균**: 선택 구간의 평균 혼잡도 기준
+        - **특정 시간대**: 선택한 시간대의 혼잡도 기준
         """)
 
 
