@@ -5,6 +5,166 @@ import re
 from pathlib import Path
 
 # ============================================================================
+# 상수 정의
+# ============================================================================
+
+# 혼잡 등급 정의: (최소값, 최대값, 색상, 이모지)
+CONGESTION_LEVELS = {
+    "매우 여유": (0, 30, "#3498db", "🔵"),
+    "여유": (30, 60, "#2ecc71", "🟢"),
+    "보통 혼잡": (60, 100, "#f1c40f", "🟡"),
+    "매우 혼잡": (100, float('inf'), "#e74c3c", "🔴")
+}
+
+# ============================================================================
+# 유틸리티 함수
+# ============================================================================
+
+def get_congestion_level(congestion: float) -> str:
+    """
+    혼잡도 값에 해당하는 등급명을 반환합니다.
+    
+    Args:
+        congestion: 혼잡도 값
+        
+    Returns:
+        혼잡 등급명 (예: "매우 여유", "보통 혼잡")
+    """
+    if pd.isna(congestion):
+        return "데이터 없음"
+    
+    for level_name, (min_val, max_val, _, _) in CONGESTION_LEVELS.items():
+        if min_val <= congestion < max_val:
+            return level_name
+    
+    return "알 수 없음"
+
+
+def get_congestion_color(congestion: float) -> str:
+    """
+    혼잡도 값에 해당하는 색상 코드를 반환합니다.
+    
+    Args:
+        congestion: 혼잡도 값
+        
+    Returns:
+        색상 코드 (예: "#3498db")
+    """
+    if pd.isna(congestion):
+        return "#95a5a6"  # 회색
+    
+    for level_name, (min_val, max_val, color, _) in CONGESTION_LEVELS.items():
+        if min_val <= congestion < max_val:
+            return color
+    
+    return "#95a5a6"  # 기본 회색
+
+
+def get_congestion_emoji(congestion: float) -> str:
+    """
+    혼잡도 값에 해당하는 이모지를 반환합니다.
+    
+    Args:
+        congestion: 혼잡도 값
+        
+    Returns:
+        이모지 (예: "🔵", "🟢")
+    """
+    if pd.isna(congestion):
+        return "⚪"
+    
+    for level_name, (min_val, max_val, _, emoji) in CONGESTION_LEVELS.items():
+        if min_val <= congestion < max_val:
+            return emoji
+    
+    return "⚪"
+
+
+# ============================================================================
+# UI 헬퍼 함수
+# ============================================================================
+
+def render_kpi_with_color(label: str, value: str, congestion: float, help_text: str = None):
+    """
+    혼잡 등급별 색상이 적용된 KPI 카드를 렌더링합니다.
+    
+    Args:
+        label: KPI 라벨
+        value: 표시할 값
+        congestion: 혼잡도 (색상 결정용)
+        help_text: 도움말 텍스트
+    """
+    color = get_congestion_color(congestion)
+    emoji = get_congestion_emoji(congestion)
+    level = get_congestion_level(congestion)
+    
+    # HTML 스타일로 색상이 적용된 카드 렌더링
+    st.markdown(f"""
+    <div style="
+        padding: 20px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, {color}22 0%, {color}44 100%);
+        border-left: 5px solid {color};
+        margin-bottom: 10px;
+    ">
+        <p style="margin: 0; font-size: 14px; color: #666;">{label}</p>
+        <p style="margin: 5px 0; font-size: 32px; font-weight: bold; color: {color};">{emoji} {value}</p>
+        <p style="margin: 0; font-size: 12px; color: #888;">{level}</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if help_text:
+        st.caption(help_text)
+
+
+def render_congestion_legend():
+    """
+    혼잡 등급 범례를 렌더링합니다.
+    """
+    st.markdown("### 📊 혼잡 등급 안내")
+    
+    cols = st.columns(len(CONGESTION_LEVELS))
+    
+    for idx, (level_name, (min_val, max_val, color, emoji)) in enumerate(CONGESTION_LEVELS.items()):
+        with cols[idx]:
+            max_display = "+" if max_val == float('inf') else str(int(max_val))
+            range_text = f"{int(min_val)}-{max_display}"
+            
+            st.markdown(f"""
+            <div style="
+                padding: 15px;
+                border-radius: 8px;
+                background-color: {color}22;
+                border: 2px solid {color};
+                text-align: center;
+            ">
+                <div style="font-size: 32px;">{emoji}</div>
+                <div style="font-weight: bold; color: {color}; margin: 5px 0;">{level_name}</div>
+                <div style="font-size: 12px; color: #666;">{range_text}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+
+def suggest_alternatives(df: pd.DataFrame, line: str, direction: str):
+    """
+    빈 결과일 때 대안을 제안합니다.
+    
+    Args:
+        df: 전체 데이터프레임
+        line: 선택한 호선
+        direction: 선택한 방향
+    """
+    # 해당 호선의 다른 역 목록
+    available_stations = df[
+        (df['line'] == line) & 
+        (df['direction'] == direction)
+    ]['station_name'].unique()
+    
+    if len(available_stations) > 0:
+        st.info(f"💡 **{line} {direction} 방향**에서 선택 가능한 역: {', '.join(sorted(available_stations)[:5])} 등 {len(available_stations)}개")
+
+
+# ============================================================================
 # 페이즈 1: 데이터 로드 및 전처리
 # ============================================================================
 
@@ -195,6 +355,9 @@ def load_and_process_data(file_path: str) -> pd.DataFrame:
     # 2. 와이드 → 롱 변환 및 정리
     df_processed = transform_wide_to_long(df_raw)
     
+    # 3. 내선/외선 방향 제외 (상행/하행만 유지)
+    df_processed = df_processed[~df_processed['direction'].isin(['내선', '외선'])]
+    
     return df_processed
 
 
@@ -202,6 +365,7 @@ def load_and_process_data(file_path: str) -> pd.DataFrame:
 # 페이즈 2: 필터 및 집계 함수
 # ============================================================================
 
+@st.cache_data
 def filter_data(df: pd.DataFrame, day_type: str, line: str, station: str, 
                 direction: str, start_time: str, end_time: str) -> pd.DataFrame:
     """
@@ -231,6 +395,7 @@ def filter_data(df: pd.DataFrame, day_type: str, line: str, station: str,
     return filtered
 
 
+@st.cache_data
 def calculate_kpis(filtered_df: pd.DataFrame) -> dict:
     """
     KPI 지표를 계산합니다.
@@ -270,6 +435,7 @@ TIME_PRESETS = {
 }
 
 
+@st.cache_data
 def filter_for_direction_compare(df: pd.DataFrame, day_type: str, line: str, 
                                   station: str, start_time: str, end_time: str) -> pd.DataFrame:
     """
@@ -297,7 +463,8 @@ def filter_for_direction_compare(df: pd.DataFrame, day_type: str, line: str,
     return filtered
 
 
-def filter_for_line_compare(df: pd.DataFrame, day_type: str, lines: list, 
+@st.cache_data
+def filter_for_line_compare(df: pd.DataFrame, day_type: str, lines: tuple, 
                             direction: str, start_time: str, end_time: str) -> pd.DataFrame:
     """
     다중 호선 데이터를 필터링합니다 (호선별 비교용).
@@ -305,7 +472,7 @@ def filter_for_line_compare(df: pd.DataFrame, day_type: str, lines: list,
     Args:
         df: 전처리된 DataFrame
         day_type: 요일구분
-        lines: 호선 리스트
+        lines: 호선 튜플 (캐싱을 위해 tuple 사용)
         direction: 방향
         start_time: 시작 시간
         end_time: 종료 시간
@@ -327,7 +494,7 @@ def filter_for_line_compare(df: pd.DataFrame, day_type: str, lines: list,
 def create_direction_compare_chart(df: pd.DataFrame, time_slots: list, 
                                    station: str, day_type: str) -> alt.Chart:
     """
-    방향 비교 멀티라인 차트를 생성합니다.
+    방향 비교 멀티라인 차트를 생성합니다 (기준선 포함).
     
     Args:
         df: 양방향 데이터 DataFrame
@@ -344,14 +511,15 @@ def create_direction_compare_chart(df: pd.DataFrame, time_slots: list,
     if len(chart_data) == 0:
         return None
     
-    chart = alt.Chart(chart_data).mark_line(point=True, strokeWidth=3).encode(
+    # 기본 멀티라인 차트
+    line_chart = alt.Chart(chart_data).mark_line(point=True, strokeWidth=3).encode(
         x=alt.X('time_slot:N', 
                 title='시간대',
                 sort=time_slots,
                 axis=alt.Axis(labelAngle=-45)),
         y=alt.Y('congestion:Q', 
                 title='혼잡도',
-                scale=alt.Scale(domain=[0, max(chart_data['congestion'].max() * 1.1, 100)])),
+                scale=alt.Scale(domain=[0, max(chart_data['congestion'].max() * 1.1, 120)])),
         color=alt.Color('direction:N', 
                        title='방향',
                        scale=alt.Scale(scheme='category10')),
@@ -360,11 +528,23 @@ def create_direction_compare_chart(df: pd.DataFrame, time_slots: list,
             alt.Tooltip('time_slot:N', title='시간대'),
             alt.Tooltip('congestion:Q', title='혼잡도', format='.1f')
         ]
-    ).properties(
+    )
+    
+    # 혼잡 등급 기준선 추가
+    reference_lines = pd.DataFrame({
+        'threshold': [30, 60, 100],
+        'label': ['여유 기준', '보통 혼잡 기준', '매우 혼잡 기준']
+    })
+    
+    rule_chart = alt.Chart(reference_lines).mark_rule(strokeDash=[5, 5], opacity=0.3, color='gray').encode(
+        y='threshold:Q',
+        size=alt.value(1)
+    )
+    
+    # 차트 합성
+    chart = (line_chart + rule_chart).properties(
         title=f"{station} 방향별 비교 - {day_type}",
         height=400
-    ).configure_point(
-        size=80
     )
     
     return chart
@@ -373,7 +553,7 @@ def create_direction_compare_chart(df: pd.DataFrame, time_slots: list,
 def create_line_compare_chart(df: pd.DataFrame, time_slots: list, 
                               direction: str, day_type: str) -> alt.Chart:
     """
-    호선별 비교 멀티라인 차트를 생성합니다.
+    호선별 비교 멀티라인 차트를 생성합니다 (기준선 포함).
     
     Args:
         df: 다중 호선 데이터 DataFrame
@@ -392,14 +572,15 @@ def create_line_compare_chart(df: pd.DataFrame, time_slots: list,
     if len(chart_data) == 0:
         return None
     
-    chart = alt.Chart(chart_data).mark_line(point=True, strokeWidth=3).encode(
+    # 기본 멀티라인 차트
+    line_chart = alt.Chart(chart_data).mark_line(point=True, strokeWidth=3).encode(
         x=alt.X('time_slot:N', 
                 title='시간대',
                 sort=time_slots,
                 axis=alt.Axis(labelAngle=-45)),
         y=alt.Y('congestion:Q', 
                 title='평균 혼잡도',
-                scale=alt.Scale(domain=[0, max(chart_data['congestion'].max() * 1.1, 100)])),
+                scale=alt.Scale(domain=[0, max(chart_data['congestion'].max() * 1.1, 120)])),
         color=alt.Color('line:N', 
                        title='호선',
                        scale=alt.Scale(scheme='category10')),
@@ -408,11 +589,23 @@ def create_line_compare_chart(df: pd.DataFrame, time_slots: list,
             alt.Tooltip('time_slot:N', title='시간대'),
             alt.Tooltip('congestion:Q', title='평균 혼잡도', format='.1f')
         ]
-    ).properties(
+    )
+    
+    # 혼잡 등급 기준선 추가
+    reference_lines = pd.DataFrame({
+        'threshold': [30, 60, 100],
+        'label': ['여유 기준', '보통 혼잡 기준', '매우 혼잡 기준']
+    })
+    
+    rule_chart = alt.Chart(reference_lines).mark_rule(strokeDash=[5, 5], opacity=0.3, color='gray').encode(
+        y='threshold:Q',
+        size=alt.value(1)
+    )
+    
+    # 차트 합성
+    chart = (line_chart + rule_chart).properties(
         title=f"호선별 평균 혼잡도 비교 ({direction}) - {day_type}",
         height=400
-    ).configure_point(
-        size=80
     )
     
     return chart
@@ -425,7 +618,7 @@ def create_line_compare_chart(df: pd.DataFrame, time_slots: list,
 def main():
     st.set_page_config(page_title="서울 지하철 혼잡도 대시보드", layout="wide")
     st.title("🚇 서울 지하철 혼잡도 대시보드")
-    st.markdown("**페이즈 3**: 혼잡도 분석, 시각화 및 비교 기능")
+    st.markdown("**페이즈 4 완료**: UX/성능/안정화 - 혼잡 등급 색상, 기준선, 캐싱 최적화 적용")
     
     # 간단한 사용 안내
     st.info("""
@@ -433,13 +626,47 @@ def main():
     출근/퇴근 시간대 프리셋을 사용하거나 여러 호선을 선택하여 비교할 수 있습니다.
     """)
     
+    # 데이터 해석 안내
+    with st.expander("ℹ️ 데이터 해석 가이드"):
+        st.markdown("""
+        ### 📊 혼잡도 값의 의미
+        - 혼잡도는 지하철 칸의 승객 밀집도를 나타내는 지표입니다.
+        - **100 이상**: 정원 초과 상태 (매우 혼잡)
+        - **60-100**: 일부 승객이 서서 탑승 (보통 혼잡)
+        - **30-60**: 대부분 착석 가능 (여유)
+        - **0-30**: 충분한 좌석 여유 (매우 여유)
+        
+        ### ⏰ 시간대 표기 방법
+        - 표기된 시간(예: "05:30")은 해당 시간부터 **30분 구간의 평균 혼잡도**를 나타냅니다.
+        - 예: "07:00" = 07:00~07:30 구간, "08:30" = 08:30~09:00 구간
+        
+        ### ⚠️ 결측값(0.0 또는 빈 값) 해석
+        - **0.0 값**: 해당 시간대에 미운행하거나 데이터 미집계
+        - **빈 값**: 데이터 수집 오류 또는 해당 구간 없음
+        - 심야/새벽 시간대에 0.0이 많은 것은 정상입니다.
+        """)
+    
+    
     # 데이터 파일 경로
     data_file = "서울교통공사_지하철혼잡도정보_20250930.csv"
     
     # 파일 존재 여부 확인
     if not Path(data_file).exists():
-        st.error(f"데이터 파일을 찾을 수 없습니다: {data_file}")
-        st.info("현재 디렉토리에 CSV 파일이 있는지 확인해주세요.")
+        st.error(f"❌ 데이터 파일을 찾을 수 없습니다: `{data_file}`")
+        st.info("💡 현재 디렉토리에 CSV 파일이 있는지 확인해주세요.")
+        
+        # 파일 업로드 옵션 제공
+        st.markdown("### 📤 파일 업로드")
+        uploaded_file = st.file_uploader(
+            "혼잡도 CSV 파일을 업로드하세요",
+            type=['csv'],
+            help="서울교통공사 지하철 혼잡도 정보 CSV 파일"
+        )
+        
+        if uploaded_file is not None:
+            st.success(f"✅ 파일이 업로드되었습니다: {uploaded_file.name}")
+            st.info("파일을 작업 디렉토리에 저장한 후 다시 실행해주세요.")
+        
         return
     
     # 데이터 로드 및 전처리
@@ -526,74 +753,141 @@ def main():
         end_time
     )
     
-    # 빈 결과 처리
+    # 빈 결과 처리 - 대안 제안 추가
     if len(filtered_df) == 0:
         st.warning("⚠️ 선택한 조건에 해당하는 데이터가 없습니다.")
-        st.info("다른 필터 조건을 선택해주세요.")
+        st.info("💡 **대안 제안**: 시간대 범위를 넓히거나 다른 역/호선을 선택해보세요.")
+        
+        # 대안 제안
+        suggest_alternatives(df, selected_line, selected_direction)
+        
+        # 추가 팁
+        with st.expander("📌 문제 해결 팁"):
+            st.markdown("""
+            **데이터가 없는 경우 확인 사항:**
+            1. **시간대 범위**: 너무 좁은 시간대를 선택하지 않았는지 확인하세요.
+            2. **요일구분**: 현재 데이터는 평일만 포함할 수 있습니다.
+            3. **역/방향**: 선택한 역과 방향 조합이 실제로 운행되는지 확인하세요.
+            
+            **추천 조치:**
+            - "전체" 시간대 프리셋 버튼을 클릭해보세요.
+            - 다른 역을 선택해보세요.
+            - 다른 방향을 선택해보세요.
+            """)
+        
         st.stop()
     
     # ========================================================================
-    # KPI 카드 (3개)
+    # KPI 카드 (3개) - 혼잡 등급별 색상 적용
     # ========================================================================
     kpis = calculate_kpis(filtered_df)
+    
+    # 혼잡 등급 범례 표시
+    render_congestion_legend()
+    st.markdown("---")
     
     st.markdown("### 📊 핵심 지표")
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.metric(
+        render_kpi_with_color(
             label="최대 혼잡도",
             value=f"{kpis['max_congestion']:.1f}",
-            help="선택한 시간대 내 최대 혼잡도"
+            congestion=kpis['max_congestion'],
+            help_text="선택한 시간대 내 최대 혼잡도"
         )
     
     with col2:
-        st.metric(
-            label="피크 시간대",
-            value=kpis['peak_time'],
-            help="최대 혼잡도가 발생한 시간"
-        )
+        # 피크 시간대는 색상 없이 표시
+        st.markdown(f"""
+        <div style="
+            padding: 20px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #95a5a622 0%, #95a5a644 100%);
+            border-left: 5px solid #95a5a6;
+            margin-bottom: 10px;
+        ">
+            <p style="margin: 0; font-size: 14px; color: #666;">피크 시간대</p>
+            <p style="margin: 5px 0; font-size: 32px; font-weight: bold; color: #95a5a6;">⏰ {kpis['peak_time']}</p>
+            <p style="margin: 0; font-size: 12px; color: #888;">최대 혼잡도 발생 시각</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.caption("최대 혼잡도가 발생한 시간")
     
     with col3:
-        st.metric(
+        render_kpi_with_color(
             label="평균 혼잡도",
             value=f"{kpis['avg_congestion']:.1f}",
-            help="선택한 시간대 내 평균 혼잡도"
+            congestion=kpis['avg_congestion'],
+            help_text="선택한 시간대 내 평균 혼잡도"
         )
     
     st.markdown("---")
     
     # ========================================================================
-    # 라인차트 (시간대별 혼잡도)
+    # 라인차트 (시간대별 혼잡도) - 기준선 추가
     # ========================================================================
     st.markdown("### 📈 시간대별 혼잡도 추이")
+    
+    # 대용량 데이터 경고
+    if len(filtered_df) > 10000:
+        st.warning(f"⚠️ 대용량 데이터 ({len(filtered_df):,}개 레코드) - 차트 생성에 시간이 걸릴 수 있습니다.")
     
     # NaN 제외한 데이터로 차트 생성
     chart_data = filtered_df.dropna(subset=['congestion'])
     
     if len(chart_data) > 0:
-        chart = alt.Chart(chart_data).mark_line(point=True, strokeWidth=3).encode(
-            x=alt.X('time_slot:N', 
-                    title='시간대',
-                    sort=time_slots,
-                    axis=alt.Axis(labelAngle=-45)),
-            y=alt.Y('congestion:Q', 
-                    title='혼잡도',
-                    scale=alt.Scale(domain=[0, max(chart_data['congestion'].max() * 1.1, 100)])),
-            tooltip=[
-                alt.Tooltip('time_slot:N', title='시간대'),
-                alt.Tooltip('congestion:Q', title='혼잡도', format='.1f')
-            ]
-        ).properties(
-            title=f"{selected_station} ({selected_direction}) - {selected_day}",
-            height=400
-        ).configure_point(
-            size=80
-        ).configure_line(
-            color='#1f77b4'
-        )
+        with st.spinner("📊 차트를 생성하는 중..."):
+            # 기본 라인 차트
+            line_chart = alt.Chart(chart_data).mark_line(point=True, strokeWidth=3, color='#1f77b4').encode(
+                x=alt.X('time_slot:N', 
+                        title='시간대',
+                        sort=time_slots,
+                        axis=alt.Axis(labelAngle=-45)),
+                y=alt.Y('congestion:Q', 
+                        title='혼잡도',
+                        scale=alt.Scale(domain=[0, max(chart_data['congestion'].max() * 1.1, 120)])),
+                tooltip=[
+                    alt.Tooltip('time_slot:N', title='시간대'),
+                    alt.Tooltip('congestion:Q', title='혼잡도', format='.1f')
+                ]
+            )
+            
+            # 혼잡 등급 기준선 추가
+            reference_lines = pd.DataFrame({
+                'threshold': [30, 60, 100],
+                'label': ['여유 기준', '보통 혼잡 기준', '매우 혼잡 기준'],
+                'color': ['#2ecc71', '#f1c40f', '#e74c3c']
+            })
+            
+            rule_chart = alt.Chart(reference_lines).mark_rule(strokeDash=[5, 5], opacity=0.5).encode(
+                y='threshold:Q',
+                color=alt.Color('label:N', scale=alt.Scale(
+                    domain=['여유 기준', '보통 혼잡 기준', '매우 혼잡 기준'],
+                    range=['#2ecc71', '#f1c40f', '#e74c3c']
+                ), legend=alt.Legend(title='기준선')),
+                size=alt.value(2)
+            )
+            
+            # 차트 합성
+            final_chart = (line_chart + rule_chart).properties(
+                title=f"{selected_station} ({selected_direction}) - {selected_day}",
+                height=400
+            )
+            
+            st.altair_chart(final_chart, use_container_width=True)
         
-        st.altair_chart(chart, use_container_width=True)
+        # 안내 캡션
+        col_caption1, col_caption2 = st.columns(2)
+        with col_caption1:
+            st.caption("💡 점선은 혼잡 등급 기준선입니다. (30: 여유, 60: 보통 혼잡, 100: 매우 혼잡)")
+        with col_caption2:
+            # 결측값 비율 표시
+            total_count = len(filtered_df)
+            missing_count = filtered_df['congestion'].isna().sum()
+            if missing_count > 0:
+                missing_pct = (missing_count / total_count * 100)
+                st.caption(f"⚠️ 결측값: {missing_count}개 ({missing_pct:.1f}%) - 미운행 또는 미집계 시간대")
     else:
         st.info("표시할 데이터가 없습니다.")
     
@@ -605,25 +899,28 @@ def main():
     st.markdown("### ⚖️ 방향별 혼잡도 비교")
     
     # 양방향 데이터 필터링
-    direction_compare_df = filter_for_direction_compare(
-        df, 
-        selected_day, 
-        selected_line, 
-        selected_station,
-        start_time, 
-        end_time
-    )
+    with st.spinner("🔄 방향별 데이터를 비교하는 중..."):
+        direction_compare_df = filter_for_direction_compare(
+            df, 
+            selected_day, 
+            selected_line, 
+            selected_station,
+            start_time, 
+            end_time
+        )
     
     if len(direction_compare_df) > 0:
-        direction_chart = create_direction_compare_chart(
-            direction_compare_df, 
-            time_slots, 
-            selected_station, 
-            selected_day
-        )
+        with st.spinner("📊 비교 차트를 생성하는 중..."):
+            direction_chart = create_direction_compare_chart(
+                direction_compare_df, 
+                time_slots, 
+                selected_station, 
+                selected_day
+            )
         
         if direction_chart is not None:
             st.altair_chart(direction_chart, use_container_width=True)
+            st.caption("💡 선택한 역의 양방향 혼잡도를 비교합니다. 출근/퇴근 시간대에 방향별 차이가 명확히 나타납니다.")
         else:
             st.info("방향별 비교 데이터가 없습니다.")
     else:
@@ -637,31 +934,41 @@ def main():
     if len(compare_lines) > 0:
         st.markdown("### 🚇 호선별 평균 혼잡도 비교")
         
-        # 다중 호선 데이터 필터링
-        line_compare_df = filter_for_line_compare(
-            df, 
-            selected_day, 
-            compare_lines, 
-            selected_direction,
-            start_time, 
-            end_time
-        )
+        # 다중 호선 데이터 필터링 (캐싱을 위해 tuple로 변환)
+        with st.spinner(f"🚇 {len(compare_lines)}개 호선 데이터를 비교하는 중..."):
+            line_compare_df = filter_for_line_compare(
+                df, 
+                selected_day, 
+                tuple(compare_lines), 
+                selected_direction,
+                start_time, 
+                end_time
+            )
         
         if len(line_compare_df) > 0:
-            line_chart = create_line_compare_chart(
-                line_compare_df, 
-                time_slots, 
-                selected_direction, 
-                selected_day
-            )
+            # 대용량 비교 데이터 경고
+            if len(line_compare_df) > 5000:
+                st.info(f"ℹ️ {len(line_compare_df):,}개 레코드를 집계하여 차트를 생성합니다.")
+            
+            with st.spinner("📊 호선별 비교 차트를 생성하는 중..."):
+                line_chart = create_line_compare_chart(
+                    line_compare_df, 
+                    time_slots, 
+                    selected_direction, 
+                    selected_day
+                )
             
             if line_chart is not None:
                 st.altair_chart(line_chart, use_container_width=True)
                 
                 # 추가 정보 표시
-                unique_lines_in_result = line_compare_df['line'].nunique()
-                if unique_lines_in_result < len(compare_lines):
-                    st.caption(f"⚠️ 선택한 {len(compare_lines)}개 호선 중 {unique_lines_in_result}개 호선의 데이터만 표시됩니다.")
+                col_caption1, col_caption2 = st.columns(2)
+                with col_caption1:
+                    st.caption("💡 각 호선의 전체 역 평균 혼잡도를 시간대별로 비교합니다.")
+                with col_caption2:
+                    unique_lines_in_result = line_compare_df['line'].nunique()
+                    if unique_lines_in_result < len(compare_lines):
+                        st.caption(f"⚠️ 선택한 {len(compare_lines)}개 호선 중 {unique_lines_in_result}개 호선의 데이터만 표시됩니다.")
             else:
                 st.info("호선별 비교 데이터가 없습니다.")
         else:
@@ -730,6 +1037,9 @@ def main():
         # 순위 추가
         top_df.insert(0, '순위', range(1, len(top_df) + 1))
         
+        # 혼잡 등급 및 이모지 추가
+        top_df['혼잡등급'] = top_df['congestion'].apply(get_congestion_emoji)
+        
         # 컬럼명 한글화
         top_df_display = top_df.rename(columns={
             '순위': '순위',
@@ -737,11 +1047,25 @@ def main():
             'station_name': '역명',
             'line': '호선',
             'direction': '방향',
-            'congestion': '혼잡도'
+            'congestion': '혼잡도',
+            '혼잡등급': '등급'
         })
         
+        # 혼잡도에 색상 적용하는 함수
+        def color_congestion(val):
+            if pd.isna(val):
+                return ''
+            color = get_congestion_color(val)
+            return f'background-color: {color}33; color: {color}; font-weight: bold;'
+        
+        # 스타일 적용
+        styled_df = top_df_display.style.applymap(
+            color_congestion,
+            subset=['혼잡도']
+        )
+        
         st.dataframe(
-            top_df_display,
+            styled_df,
             use_container_width=True,
             hide_index=True
         )
