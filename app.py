@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import altair as alt
 import re
 from pathlib import Path
 
@@ -198,12 +199,74 @@ def load_and_process_data(file_path: str) -> pd.DataFrame:
 
 
 # ============================================================================
-# 메인 UI
+# 페이즈 2: 필터 및 집계 함수
+# ============================================================================
+
+def filter_data(df: pd.DataFrame, day_type: str, line: str, station: str, 
+                direction: str, start_time: str, end_time: str) -> pd.DataFrame:
+    """
+    필터 조건에 따라 데이터를 필터링합니다.
+    
+    Args:
+        df: 전처리된 DataFrame
+        day_type: 요일구분
+        line: 호선
+        station: 역명
+        direction: 방향
+        start_time: 시작 시간
+        end_time: 종료 시간
+        
+    Returns:
+        필터링된 DataFrame
+    """
+    filtered = df[
+        (df['day_type'] == day_type) &
+        (df['line'] == line) &
+        (df['station_name'] == station) &
+        (df['direction'] == direction) &
+        (df['time_slot'] >= start_time) &
+        (df['time_slot'] <= end_time)
+    ].copy()
+    
+    return filtered
+
+
+def calculate_kpis(filtered_df: pd.DataFrame) -> dict:
+    """
+    KPI 지표를 계산합니다.
+    
+    Args:
+        filtered_df: 필터링된 DataFrame
+        
+    Returns:
+        KPI 딕셔너리 (max_congestion, peak_time, avg_congestion)
+    """
+    kpis = {}
+    
+    # NaN 제외한 데이터
+    valid_data = filtered_df.dropna(subset=['congestion'])
+    
+    if len(valid_data) > 0:
+        kpis['max_congestion'] = valid_data['congestion'].max()
+        max_idx = valid_data['congestion'].idxmax()
+        kpis['peak_time'] = valid_data.loc[max_idx, 'time_slot']
+        kpis['avg_congestion'] = valid_data['congestion'].mean()
+    else:
+        kpis['max_congestion'] = 0.0
+        kpis['peak_time'] = 'N/A'
+        kpis['avg_congestion'] = 0.0
+    
+    return kpis
+
+
+# ============================================================================
+# 메인 UI (페이즈 2: MVP)
 # ============================================================================
 
 def main():
-    st.title("서울 지하철 혼잡도 대시보드")
-    st.markdown("**페이즈 1**: 데이터 로드 및 전처리 확인")
+    st.set_page_config(page_title="서울 지하철 혼잡도 대시보드", layout="wide")
+    st.title("🚇 서울 지하철 혼잡도 대시보드")
+    st.markdown("**페이즈 2**: 혼잡도 분석 및 시각화")
     
     # 데이터 파일 경로
     data_file = "서울교통공사_지하철혼잡도정보_20250930.csv"
@@ -218,65 +281,189 @@ def main():
     with st.spinner("데이터를 로드하고 전처리 중입니다..."):
         df = load_and_process_data(data_file)
     
-    st.success(f"데이터 로드 완료! 총 {len(df):,}개 레코드")
-    
-    # 품질 검사 리포트
-    with st.expander("📊 데이터 품질 리포트", expanded=True):
-        report = get_data_quality_report(df)
+    # ========================================================================
+    # Sidebar 필터
+    # ========================================================================
+    with st.sidebar:
+        st.header("🔍 필터")
         
-        col1, col2, col3 = st.columns(3)
+        # 요일구분
+        day_types = sorted(df['day_type'].unique().tolist())
+        selected_day = st.selectbox("요일구분", day_types, index=0)
         
-        with col1:
-            st.metric("총 레코드 수", f"{report['total_records']:,}")
-            st.metric("유니크 역", f"{report['unique_stations']}")
-            st.metric("유니크 호선", f"{report['unique_lines']}")
+        # 호선
+        lines = sorted(df['line'].unique().tolist())
+        selected_line = st.selectbox("호선", lines, index=0)
         
-        with col2:
-            st.metric("결측치", f"{report['total_missing']:,}", 
-                     f"{report['missing_pct']:.2f}%")
-            st.metric("0.0 값", f"{report['zero_count']:,}",
-                     f"{report['zero_pct']:.2f}%")
-            st.metric("음수 값", f"{report['negative_count']}")
+        # 역 선택 (해당 호선만 필터링)
+        stations_in_line = df[df['line'] == selected_line]['station_name'].unique().tolist()
+        selected_station = st.selectbox("역", sorted(stations_in_line), index=0)
         
-        with col3:
-            if report['mean_congestion'] is not None:
-                st.metric("평균 혼잡도", f"{report['mean_congestion']:.1f}")
-                st.metric("최대 혼잡도", f"{report['max_congestion']:.1f}")
-                st.metric("100 초과 값", f"{report['over_100_count']:,}")
+        # 방향
+        directions = sorted(df['direction'].unique().tolist())
+        selected_direction = st.selectbox("방향", directions, index=0)
         
-        # 상세 통계
+        # 시간대 범위
+        time_slots = sorted(df['time_slot'].unique().tolist())
+        st.markdown("**시간대 범위**")
+        start_time, end_time = st.select_slider(
+            "시간대 선택",
+            options=time_slots,
+            value=(time_slots[0], time_slots[-1])
+        )
+        
         st.markdown("---")
-        st.markdown("**상세 통계**")
-        stats_col1, stats_col2 = st.columns(2)
-        
-        with stats_col1:
-            st.write(f"- 최소 혼잡도: {report['min_congestion']:.1f}" if report['min_congestion'] is not None else "- 최소 혼잡도: N/A")
-            st.write(f"- 중앙값 혼잡도: {report['median_congestion']:.1f}" if report['median_congestion'] is not None else "- 중앙값 혼잡도: N/A")
-        
-        with stats_col2:
-            st.write(f"- 요일구분 종류: {report['unique_day_types']}")
-            st.write(f"- 데이터 품질: {'✅ 양호' if report['negative_count'] == 0 else '⚠️ 음수 값 존재'}")
+        st.caption(f"총 {len(df):,}개 레코드")
     
-    # 샘플 데이터 표시
-    st.markdown("---")
-    st.subheader("🔍 전처리 결과 샘플 (20행)")
-    
-    # 샘플 20행 표시
-    st.dataframe(
-        df.head(20),
-        width='stretch',
-        height=400
+    # ========================================================================
+    # 필터 적용
+    # ========================================================================
+    filtered_df = filter_data(
+        df, 
+        selected_day, 
+        selected_line, 
+        selected_station, 
+        selected_direction,
+        start_time, 
+        end_time
     )
     
-    # 전체 데이터 스키마 정보
-    with st.expander("📋 데이터 스키마"):
-        st.write("**컬럼 정보:**")
-        schema_df = pd.DataFrame({
-            '컬럼명': df.columns,
-            '타입': [str(df[col].dtype) for col in df.columns],
-            '샘플': [str(df[col].iloc[0]) if len(df) > 0 else '' for col in df.columns]
-        })
-        st.dataframe(schema_df, width='stretch')
+    # 빈 결과 처리
+    if len(filtered_df) == 0:
+        st.warning("⚠️ 선택한 조건에 해당하는 데이터가 없습니다.")
+        st.info("다른 필터 조건을 선택해주세요.")
+        st.stop()
+    
+    # ========================================================================
+    # KPI 카드 (3개)
+    # ========================================================================
+    kpis = calculate_kpis(filtered_df)
+    
+    st.markdown("### 📊 핵심 지표")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            label="최대 혼잡도",
+            value=f"{kpis['max_congestion']:.1f}",
+            help="선택한 시간대 내 최대 혼잡도"
+        )
+    
+    with col2:
+        st.metric(
+            label="피크 시간대",
+            value=kpis['peak_time'],
+            help="최대 혼잡도가 발생한 시간"
+        )
+    
+    with col3:
+        st.metric(
+            label="평균 혼잡도",
+            value=f"{kpis['avg_congestion']:.1f}",
+            help="선택한 시간대 내 평균 혼잡도"
+        )
+    
+    st.markdown("---")
+    
+    # ========================================================================
+    # 라인차트 (시간대별 혼잡도)
+    # ========================================================================
+    st.markdown("### 📈 시간대별 혼잡도 추이")
+    
+    # NaN 제외한 데이터로 차트 생성
+    chart_data = filtered_df.dropna(subset=['congestion'])
+    
+    if len(chart_data) > 0:
+        chart = alt.Chart(chart_data).mark_line(point=True, strokeWidth=3).encode(
+            x=alt.X('time_slot:N', 
+                    title='시간대',
+                    sort=time_slots,
+                    axis=alt.Axis(labelAngle=-45)),
+            y=alt.Y('congestion:Q', 
+                    title='혼잡도',
+                    scale=alt.Scale(domain=[0, max(chart_data['congestion'].max() * 1.1, 100)])),
+            tooltip=[
+                alt.Tooltip('time_slot:N', title='시간대'),
+                alt.Tooltip('congestion:Q', title='혼잡도', format='.1f')
+            ]
+        ).properties(
+            title=f"{selected_station} ({selected_direction}) - {selected_day}",
+            height=400
+        ).configure_point(
+            size=80
+        ).configure_line(
+            color='#1f77b4'
+        )
+        
+        st.altair_chart(chart, use_container_width=True)
+    else:
+        st.info("표시할 데이터가 없습니다.")
+    
+    st.markdown("---")
+    
+    # ========================================================================
+    # TOP 구간 테이블 + CSV 다운로드
+    # ========================================================================
+    st.markdown("### 🔝 혼잡 TOP 10 구간")
+    
+    # 혼잡 TOP 10 구간
+    top_n = 10
+    top_df = filtered_df.dropna(subset=['congestion']).nlargest(top_n, 'congestion')[
+        ['time_slot', 'station_name', 'line', 'direction', 'congestion']
+    ].reset_index(drop=True)
+    
+    # 순위 추가
+    top_df.insert(0, '순위', range(1, len(top_df) + 1))
+    
+    # 컬럼명 한글화
+    top_df_display = top_df.rename(columns={
+        '순위': '순위',
+        'time_slot': '시간대',
+        'station_name': '역명',
+        'line': '호선',
+        'direction': '방향',
+        'congestion': '혼잡도'
+    })
+    
+    st.dataframe(
+        top_df_display,
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # CSV 다운로드 버튼
+    csv = top_df_display.to_csv(index=False).encode('utf-8-sig')
+    st.download_button(
+        label="📥 CSV 다운로드",
+        data=csv,
+        file_name=f"혼잡도_TOP{top_n}_{selected_station}_{selected_day}.csv",
+        mime="text/csv",
+        help="상위 혼잡 구간 데이터를 CSV 파일로 다운로드합니다."
+    )
+    
+    # ========================================================================
+    # 추가 정보 (접을 수 있음)
+    # ========================================================================
+    with st.expander("ℹ️ 데이터 정보"):
+        st.markdown(f"""
+        **필터 조건:**
+        - 요일구분: {selected_day}
+        - 호선: {selected_line}
+        - 역: {selected_station}
+        - 방향: {selected_direction}
+        - 시간대: {start_time} ~ {end_time}
+        
+        **필터링된 데이터:** {len(filtered_df)}개 레코드
+        """)
+        
+        st.markdown("**혼잡도 해석:**")
+        st.markdown("""
+        - 혼잡도는 지하철 칸의 혼잡 정도를 나타내는 지표입니다.
+        - 100 이상: 매우 혼잡 (승객이 많아 불편할 수 있음)
+        - 60-100: 보통 혼잡
+        - 30-60: 여유 있음
+        - 0-30: 매우 여유로움
+        """)
 
 
 if __name__ == "__main__":
